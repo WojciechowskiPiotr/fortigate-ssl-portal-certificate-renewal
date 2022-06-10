@@ -117,4 +117,3 @@
         dtls_max_proto_ver: "dtls1-2"
         dtls_min_proto_ver: "dtls1-2"
         dtls_tunnel: "enable"
-		
