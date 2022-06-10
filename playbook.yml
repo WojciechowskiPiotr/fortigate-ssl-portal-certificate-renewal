@@ -1,0 +1,120 @@
+- hosts: fortigates
+  collections:
+    - fortinet.fortios
+  connection: httpapi
+  gather_facts: no
+  vars:
+   vdom: "root"
+   ansible_httpapi_use_ssl: yes
+   ansible_httpapi_validate_certs: no
+   ansible_httpapi_port: 443
+   fqdn: "<<Put SSL Portal FQDN here>>"
+   acme_path: "/root/.acme.sh"  # Change this to match your acme.sh configuration without ending /
+  tasks:
+  # Generate new certificate using acme.sh. This will fail if certificate is not yet to be renewed. Then all other tasks are not executed
+  # All acme.sh variables stored in acme.conf file
+  - name: Renew cert using acme.sh with dnf_cf
+    local_action: ansible.builtin.command {{ acme_path }}/acme.sh --issue --dns dns_cf -d {{ fqdn }} 
+
+  # If new cert is created we need to update vars to read certificate and key
+  - name: Read cert file
+    set_fact:
+      cert_content: "{{ lookup('file', acme_path + '/' + fqdn + '/' + fqdn + '.cer') | b64encode }}"
+  - name: Read key file
+    set_fact:
+      key_file_content: "{{ lookup('file', acme_path + '/' + fqdn + '/' + fqdn + '.key') | b64encode }}"
+      
+  # Now we try to upload new certificate under a different name. It is just in case the certificate is incorrect or upload fails so we won't delete current active certificate
+  # First delete temporary certificate in case it still exists
+  - name: Delete temporary certificate if exists
+    fortios_vpn_certificate_local:
+      vdom:  "{{ vdom }}"
+      state: "absent"
+      access_token: "{{ fortios_access_token }}"
+      vpn_certificate_local:
+        name: "{{ fqdn }}-1"
+
+  # Import new certificate under temporary name
+  - name: Try to import new certificare under different name just in case it is incorrect
+    fortios_monitor:
+      vdom: "{{ vdom }}"
+      access_token: "{{ fortios_access_token }}"
+      selector: 'import.vpn-certificate.local'
+      params:
+        type: 'regular'
+        scope: 'global'
+        certname: "{{ fqdn }}-1"
+        file_content: "{{ cert_content }}"
+        key_file_content: "{{ key_file_content }}"
+
+  # If it works lets temporary use the new certificate. In case it fails we can (manually) rollback to old cerificate
+  - name: Assing cemporary certificate to SSL Portal.
+    fortios_vpn_ssl_settings:
+      vdom:  "{{ vdom }}"
+      access_token: "{{ fortios_access_token }}"
+      vpn_ssl_settings:
+        servercert: "{{ fqdn }}-1"
+
+  # Now we can delete the old certificate safely
+  - name: Delete current certificate
+    fortios_vpn_certificate_local:
+      vdom:  "{{ vdom }}"
+      state: "absent"
+      access_token: "{{ fortios_access_token }}"
+      vpn_certificate_local:
+        name: "{{ fqdn }}"
+
+  # Upload certificate again using the correct name
+  - name: Import new certificate using a correct name
+    fortios_monitor:
+      vdom: "{{ vdom }}"
+      access_token: "{{ fortios_access_token }}"
+      selector: 'import.vpn-certificate.local'
+      params:
+        type: 'regular'
+        scope: 'global'
+        certname: "{{ fqdn }}"
+        file_content: "{{ cert_content }}"
+        key_file_content: "{{ key_file_content }}"
+        
+  # Change the certificate to final
+  - name: Change the certificate to new one.
+    fortios_vpn_ssl_settings:
+      vdom:  "{{ vdom }}"
+      access_token: "{{ fortios_access_token }}"
+      vpn_ssl_settings:
+        servercert: "{{ fqdn }}"
+
+  # Now we can delete temporary certificate
+  - name: Delete temporary certificate
+    fortios_vpn_certificate_local:
+      vdom:  "{{ vdom }}"
+      state: "absent"
+      access_token: "{{ fortios_access_token }}"
+      vpn_certificate_local:
+        name: "{{ fqdn }}-1"
+
+  # Lets make sure the strong encryption and TLS1.3 is enforced in configuration
+  - name: Enforce high security for SSL VPN.
+    fortios_vpn_ssl_settings:
+      vdom:  "{{ vdom }}"
+      access_token: "{{ fortios_access_token }}"
+      vpn_ssl_settings:
+        algorithm: "high"
+        banned_cipher: 
+          - "3DES" 
+          - "STATIC"
+          - "SHA1"
+          - "CAMELLIA"
+          - "DSS"
+          - "RSA"
+        ssl_max_proto_ver: "tls1-3"
+        ssl_min_proto_ver: "tls1-3"
+        tlsv1_0: "disable"
+        tlsv1_1: "disable"
+        tlsv1_2: "disable"
+        tlsv1_3: "enable"
+        dtls_max_proto_ver: "dtls1-2"
+        dtls_min_proto_ver: "dtls1-2"
+        dtls_tunnel: "enable"
+		

@@ -1,0 +1,5 @@
+[fortigates]
+fg.lan fortios_access_token="<<Put Your API Token Here>>"
+
+[fortigates:vars]
+ansible_network_os=fortinet.fortios.fortio
